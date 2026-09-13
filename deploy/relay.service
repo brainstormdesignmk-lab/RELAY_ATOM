@@ -1,0 +1,21 @@
+[Unit]
+Description=Metropolis communications relay (RELAY_ATOM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/metropolis/relay
+EnvironmentFile=/opt/metropolis/relay/.env
+ExecStart=/usr/bin/env node src/relay.js
+Restart=always
+RestartSec=5
+
+# Keep writes confined to the data directory
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/metropolis/relay/data
+
+[Install]
+WantedBy=multi-user.target

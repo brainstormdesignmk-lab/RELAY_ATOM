@@ -1,0 +1,12 @@
+{
+  "name": "metropolis-relay",
+  "version": "0.3.0",
+  "description": "Metropolis communications relay for Atom cluster",
+  "main": "src/relay.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/relay.js",
+    "test": "node test/run.js"
+  },
+  "engines": { "node": ">=16" }
+}
