@@ -19,6 +19,16 @@ class Worker {
     this.timer = null;
     this.running = false;
     this.ticking = false;
+    // Identity affinity: LINA-1 -> atom1, always. Built from config.bots
+    // (RELAY_BOT_<NAME>=atomN). A message carrying a botId is NEVER re-routed
+    // to another atom — if its atom is dead/unconfigured the message parks in
+    // holding until that exact atom recovers.
+    this.atomByBotId = new Map();
+    this.tokenByBotId = new Map();
+    for (const bot of (config && config.bots) || []) {
+      this.atomByBotId.set(bot.botId, bot.atomId);
+      if (bot.token) this.tokenByBotId.set(bot.botId, bot.token);
+    }
   }
 
   start() {
@@ -69,22 +79,49 @@ class Worker {
     }
   }
 
-  pickAtom(preferredId) {
+  /** Affinity: the atom a botId is pinned to, or null when unknown. */
+  atomForBot(botId) {
+    if (!botId) return null;
+    const atomId = this.atomByBotId.get(botId);
+    return atomId || null;
+  }
+
+  pickAtom(preferredId, envelope) {
     if (preferredId) {
       const atom = this.registry.get(preferredId);
       // Preferred atom only if it is alive enough to try.
       if (atom && !this.registry.isDead(preferredId)) return atom;
       return null; // holding replay for a dead atom: leave for later
     }
-    return this.registry.next();
+    // Identity routing: a message for a known bot goes ONLY to its own atom.
+    const botId = envelope && envelope.botId;
+    if (botId) {
+      const atomId = this.atomForBot(botId);
+      if (!atomId) return null; // unknown identity: never routed
+      const atom = this.registry.get(atomId);
+      if (atom && !this.registry.isDead(atomId)) return atom;
+      return null; // own atom dead/unconfigured: park in holding/<atomId>
+    }
+    return this.registry.next(); // legacy envelopes: round-robin as before
   }
 
   async deliverClaimed(claimed, preferredId) {
-    const atom = this.pickAtom(preferredId);
+    const botId = claimed.envelope && claimed.envelope.botId;
+    const botAtomId = this.atomForBot(botId);
+    // A botId with no affinity entry is a permanent routing misconfiguration:
+    // dead-letter immediately — it must never reach ANY atom, and holding it
+    // forever would strand it invisibly.
+    if (botId && !botAtomId) {
+      this.spool.finish(claimed, 'failed');
+      this.log(`[worker] unknown botId ${botId} — message dead-lettered, not routed`);
+      return;
+    }
+    const atom = this.pickAtom(preferredId, claimed.envelope);
     if (!atom) {
-      // Nowhere to send: park it (or back to holding if replaying one atom).
+      // Nowhere to send: park under the bot's OWN atom (replays when that
+      // atom recovers), or unassigned when there is no affinity at all.
       if (preferredId) this.spool.holdFor(claimed, preferredId);
-      else this.spool.holdFor(claimed, 'unassigned');
+      else this.spool.holdFor(claimed, botAtomId || 'unassigned');
       return;
     }
     try {
@@ -107,6 +144,12 @@ class Worker {
     return new Promise((resolve, reject) => {
       const body = JSON.stringify(envelope);
       const url = new URL(atom.url);
+      // Dedicated relay auth per identity (RELAY_TOKEN_<NAME>); the legacy
+      // shared token only as fallback. NEVER a Viber credential.
+      const token =
+        (envelope && envelope.botId && this.tokenByBotId.get(envelope.botId)) ||
+        this.config.legacyToken ||
+        '';
       const req = http.request(
         {
           hostname: url.hostname,
@@ -116,7 +159,7 @@ class Worker {
           headers: {
             'content-type': 'application/json',
             'content-length': Buffer.byteLength(body),
-            'x-relay-token': this.config.legacyToken || '',
+            'x-relay-token': token,
           },
           timeout: this.config.fetchTimeoutMs,
         },

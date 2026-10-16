@@ -1,39 +1,28 @@
-# Deploy to Atom4 (32-bit, Node 16)
+# Atom4 relay deployment (antiX 21, 32-bit Node 16)
 
-Target: `/opt/metropolis/relay` + systemd (`deploy/relay.service`).
+## Live layout
 
-1. Copy the project to the Atom:
-   ```bash
-   rsync -a --exclude .env --exclude .git --exclude data/ \
-     ./ atom4:/opt/metropolis/relay/
-   ```
-2. Create `/opt/metropolis/relay/.env` **on the Atom** (do NOT reuse the dev one):
-   - `NODE_ID=atom4`, `RELAY_ROLE=relay`
-   - `ATOM1_HOST/ATOM2_HOST/ATOM3_HOST` = real IPs reachable from Atom4
-   - `RELAY_TOKEN*` = same values the atoms/adapters use
-   - Optional on small boards: `MAX_BODY_BYTES=262144`
-3. Sanity checks on the Atom:
-   ```bash
-   node -v                      # must be >=16 (v16.x expected)
-   ss -tlnp | grep 8400         # must be empty
-   node test/run.js | tail -1   # expect: NN tests: NN pass, 0 fail
-   ```
-4. Install the service:
-   ```bash
-   sudo cp deploy/relay.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now relay
-   curl -s http://127.0.0.1:8400/health   # expect {"status":"ok",...}
-   ```
-5. Logs / restarts: `journalctl -u relay -f`. The unit restarts the relay
-   automatically after crashes (`Restart=always`).
+- Project: `/home/atom/Documents/PROJECTS/RELAY`
+- Environment: `/home/atom/.relay/relay.env` (mode `600`; never copy it from a workstation)
+- Data/spool: the configured `DATA_DIR` under the project data directory
+- Runtime: `node src/relay.js`, Node 16.20.x
+- Current boot launch: Atom4's user crontab `@reboot` entry, which sources the environment and launches Node with `nohup`
 
-Notes:
-- Clock matters: queue ordering sorts by timestamped filenames. Ensure NTP
-  (`timedatectl status` shows "synchronized: yes") — the board has no RTC.
-- Keep port 8400 LAN-only. Public webhook ingress (Viber/WhatsApp) goes
-  through a TLS tunnel/proxy, never exposed directly.
-- Until Atoms 1-3 are reachable, inbound traffic accumulates in
-  `data/retry/` and `data/holding/` — the relay is stable but idle.
-- SD-card wear: dedup log compacts every 5000 appends; retention defaults
-  (processed 24h, failed 30d) are safe for secretary-scale volume.
+The checked-in `deploy/relay.service` is a systemd template for systemd hosts. Atom4 runs antiX and does not use systemd; do not install that unit there. The current `@reboot` launch does not by itself restart a process that crashes after boot. Check the Atom4 monitor/watchdog before treating the relay as appliance-grade.
+
+## Configuration
+
+Start from `deploy/relay.env.example`; create the live file at `~/.relay/relay.env` and set mode `600`. At minimum, configure the LAN bind/port, Atom1 address, bot-to-atom mapping, and separate relay credentials for the secretary and phone bridge. Relay credentials are not Viber credentials.
+
+The current live identities are `LINA1` pinned to `atom1`, and `viber1` for the phone bridge. The bridge submits inbound messages to `/inbound`; Lina submits replies to `/outbound`; the bridge claims, acknowledges, or rejects its own queue. Keep port 8400 LAN-only or behind the intended authenticated TLS proxy.
+
+## Release procedure
+
+1. Preserve the current `data/` spool and `~/.relay/relay.env`.
+2. Compare the candidate release with the deployed source and record its commit/hash.
+3. Deploy source files only; do not replace `data/` or the environment file.
+4. Restart using the documented Atom4 mechanism and confirm there is exactly one relay process.
+5. Verify `GET http://127.0.0.1:8400/health` locally on Atom4 and check the queue counts.
+6. Confirm inbound and outbound paths with controlled, non-customer messages before returning to normal traffic.
+
+For Node 16-compatible tests, run `npm test` from the project root before a release. Do not deploy a candidate that has not been reviewed against the live queue format.

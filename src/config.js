@@ -23,6 +23,32 @@ function loadConfig(env = process.env) {
     }
   }
 
+  // Identity-routed bots: RELAY_BOT_<NAME>=atomN registers a bot identity that
+  // always routes to one atom (affinity). Example: RELAY_BOT_LINA1=atom1.
+  // Optional per-bot env: RELAY_BOT_<NAME>_NUMBER (e.g. VIBER-1) and a
+  // dedicated relay token RELAY_TOKEN_<NAME> (NOT a Viber credential — this is
+  // relay-to-secretary auth only). The webhook /webhook/viber/<name-lowercase>
+  // identifies the destination bot; Viber tokens never live on the relay.
+  const bots = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('RELAY_BOT_') || !value) continue;
+    if (key.endsWith('_NUMBER') || key.endsWith('_TOKEN')) continue;
+    const name = key.slice('RELAY_BOT_'.length);
+    if (!name || !/^atom[1-9]$/.test(value)) continue;
+    // Name convention: LINA1 -> botId LINA-1 (letter prefix + instance number).
+    const m = name.match(/^([A-Z]+)(\d*)$/);
+    const botId = m ? (m[2] ? `${m[1]}-${m[2]}` : m[1]) : name;
+    const atomId = value;
+    bots.push({
+      name,
+      botId,
+      atomId,
+      numberId: env[`RELAY_BOT_${name}_NUMBER`] || '',
+      token: env[`RELAY_TOKEN_${name}`] || '',
+    });
+  }
+  bots.sort((a, b) => (a.name < b.name ? -1 : 1));
+
   return {
     nodeId: env.NODE_ID || 'unknown',
     role: env.RELAY_ROLE || 'relay',
@@ -40,6 +66,7 @@ function loadConfig(env = process.env) {
       dedup: dir('dedup'),
     },
     atoms,
+    bots,
     // Shared legacy token (identity "legacy") plus per-client tokens:
     // every env var named RELAY_TOKEN_<CLIENT> maps client -> token.
     tokenEnvPrefix: 'RELAY_TOKEN_',

@@ -53,6 +53,7 @@ function normalizeViber(payload, receivedAt) {
   out.senderName = (payload.sender && payload.sender.name) || '';
   out.text = typeof payload.message.text === 'string' ? payload.message.text : '';
   out.ts = payload.timestamp ? new Date(payload.timestamp).toISOString() : new Date().toISOString();
+  out.viberMessageToken = typeof payload.message_token === 'number' ? payload.message_token : null;
   out.id = makeId(out.platform, out.chatId, out.ts, out.text);
   return out;
 }
@@ -101,4 +102,27 @@ function whatsappVerifyChallenge(query, expected = process.env.WHATSAPP_VERIFY_T
   return null;
 }
 
-module.exports = { normalize, PLATFORMS, whatsappVerifyChallenge, makeId };
+/**
+ * Relay -> secretary contract envelope (per-identity routing).
+ *
+ * Stamp a normalized platform message with the identity fields the webhook
+ * PATH established (/webhook/viber/lina1 -> LINA-1 -> atom1). The relay holds
+ * no Viber credentials: numberId is a LABEL from config (RELAY_BOT_<NAME>_NUMBER),
+ * never a token. Fields Viber does not supply (atomId, numberId) are filled
+ * from config; everything Viber does supply rides through unchanged.
+ */
+function toRelayEnvelope(msg, bot, platform) {
+  return {
+    ...msg,
+    botId: bot ? bot.botId : null,
+    atomId: bot ? bot.atomId : null,
+    channel: platform,
+    numberId: bot ? bot.numberId || '' : '',
+    // messageId: Viber supplies message_token; the normalized id (sha256 of
+    // platform|chatId|ts|text) is the deterministic fallback used for dedup.
+    messageId: msg.viberMessageToken != null ? String(msg.viberMessageToken) : msg.id,
+    from: msg.senderId,
+  };
+}
+
+module.exports = { normalize, PLATFORMS, whatsappVerifyChallenge, makeId, toRelayEnvelope };
