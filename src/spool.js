@@ -79,7 +79,7 @@ class Spool {
     const envelope = claimed.envelope;
     envelope.attempts = (envelope.attempts || 0) + 1;
     envelope.lastError = String(err && err.message ? err.message : err);
-    envelope.lastErrorAt = new Date().toISOString();
+    envelope.lastErrorAt = new Date(this.now()).toISOString();
     const dirName = envelope.attempts > RETRY_MAX ? 'failed' : 'retry';
     const dest = path.join(this.dirs[dirName], path.basename(claimed.path));
     const tmp = `${dest}.tmp-${process.pid}-${cryptoRandom()}`;
@@ -124,6 +124,22 @@ class Spool {
       if (claimed.length >= limit) break;
       const c = this.claim(filePath);
       if (c) claimed.push(c);
+    }
+    return claimed;
+  }
+
+  /** Claim retry messages whose last failure is older than the retry delay. */
+  drainDueRetries(delayMs = 0) {
+    const delay = Math.max(0, Number(delayMs) || 0);
+    const now = this.now();
+    const claimed = [];
+    for (const filePath of this.list('retry')) {
+      const envelope = this.read(filePath);
+      const failedAt = Date.parse(envelope.lastErrorAt || '');
+      // Old-format or missing timestamps must not strand a message forever.
+      if (Number.isFinite(failedAt) && now - failedAt < delay) continue;
+      const item = this.claim(filePath);
+      if (item) claimed.push(item);
     }
     return claimed;
   }

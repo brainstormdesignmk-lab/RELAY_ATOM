@@ -49,6 +49,7 @@ function makeWorker(spool, atoms, config = {}) {
     registry,
     config: {
       workerIntervalSeconds: 3600,
+      retryDelaySeconds: 30,
       fetchTimeoutMs: 2000,
       legacyToken: 'tok',
       ...config,
@@ -92,6 +93,49 @@ test('failed delivery retries, then parks in per-atom holding when dead', async 
   await worker.deliverClaimed(retried);
   assert.equal(registry.get('atom1').state, 'dead');
   assert.equal(spool.listHolding('atom1').length, 1);
+  server.close();
+});
+
+test('retry queue waits for its delay, then delivers a due message', async () => {
+  const spool = makeSpool();
+  let status = 500;
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push(JSON.parse(body));
+      res.writeHead(status);
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const atom = { id: 'atom1', host: '127.0.0.1', port, url: `http://127.0.0.1:${port}/message` };
+  const { worker, registry } = makeWorker(spool, [atom], { retryDelaySeconds: 60 });
+  spool.write('inbound', envelope('retry-due'));
+
+  await worker.runOnce();
+  assert.equal(spool.list('retry').length, 1);
+  assert.equal(received.length, 1);
+
+  // A retry before the configured delay stays parked.
+  status = 200;
+  await worker.runOnce();
+  assert.equal(spool.list('retry').length, 1);
+  assert.equal(received.length, 1);
+
+  // Age only the retry metadata; no message content is changed.
+  const retryPath = spool.list('retry')[0];
+  const retryEnvelope = spool.read(retryPath);
+  retryEnvelope.lastErrorAt = new Date(Date.now() - 61_000).toISOString();
+  fs.writeFileSync(retryPath, JSON.stringify(retryEnvelope));
+  await worker.runOnce();
+  assert.equal(spool.list('retry').length, 0);
+  assert.equal(spool.list('processed').length, 1);
+  assert.equal(received.length, 2);
+  assert.equal(received[1].id, 'retry-due');
+  assert.equal(registry.get('atom1').state, 'healthy');
   server.close();
 });
 

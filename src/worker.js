@@ -56,6 +56,18 @@ class Worker {
 
   async runOnce() {
     await this.replayHolding();
+    const configuredDelay = Number(this.config.retryDelaySeconds);
+    const retryDelayMs = Number.isFinite(configuredDelay) && configuredDelay >= 0
+      ? configuredDelay * 1000
+      : 30_000;
+    const dueRetries = this.spool.drainDueRetries(retryDelayMs);
+    for (const c of dueRetries) {
+      try {
+        await this.deliverClaimed(c);
+      } catch (err) {
+        this.log(`[worker] retry delivery error: ${err.message}`);
+      }
+    }
     const claimed = this.spool.drain('inbound');
     for (const c of claimed) {
       try {

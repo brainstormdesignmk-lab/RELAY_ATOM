@@ -80,6 +80,32 @@ test('finish moves claimed to processed', () => {
   assert.equal(s.list('processed').length, 1);
 });
 
+test('drainDueRetries respects retry delay using the injected clock', () => {
+  let now = 1700000000000;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-retry-clock-'));
+  const dir = (name) => path.join(base, name);
+  const s = new Spool({
+    inbound: dir('inbound'),
+    processing: dir('processing'),
+    processed: dir('processed'),
+    retry: dir('retry'),
+    failed: dir('failed'),
+    holding: dir('holding'),
+    health: dir('health'),
+    dedup: dir('dedup'),
+  }, { now: () => now });
+  s.write('inbound', envelope('delayed'));
+  const claimed = s.claim(s.list('inbound')[0]);
+  const retry = s.requeueOrFail(claimed, new Error('temporary'));
+  assert.equal(retry.envelope.lastErrorAt, new Date(now).toISOString());
+  assert.equal(s.drainDueRetries(30000).length, 0);
+  assert.equal(s.list('retry').length, 1);
+  now += 30000;
+  const due = s.drainDueRetries(30000);
+  assert.equal(due.length, 1);
+  assert.equal(due[0].envelope.id, 'delayed');
+});
+
 test('drain claims oldest first and skips vanished files', () => {
   const s = makeSpool();
   s.write('inbound', envelope('d1'));
